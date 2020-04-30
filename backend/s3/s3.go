@@ -22,6 +22,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"path"
@@ -43,6 +44,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/indigo-dc/liboidcagent-go/liboidcagent"
+	"github.com/minio/minio/pkg/auth"
 	"github.com/ncw/swift"
 	"github.com/pkg/errors"
 	"github.com/rclone/rclone/fs"
@@ -1063,6 +1066,93 @@ func (o *Object) split() (bucket, bucketPath string) {
 	return o.fs.split(o.remote)
 }
 
+// IAMProvider credential provider for oidc
+type IAMProvider struct {
+	stsEndpoint string
+	accountname string
+	httpClient  *http.Client
+	creds       *AssumeRoleWithWebIdentityResponse
+}
+
+// AssumeRoleWithWebIdentityResponse the struct of the STS WebIdentity call response
+type AssumeRoleWithWebIdentityResponse struct {
+	XMLName          xml.Name          `xml:"https://sts.amazonaws.com/doc/2011-06-15/ AssumeRoleWithWebIdentityResponse" json:"-"`
+	Result           WebIdentityResult `xml:"AssumeRoleWithWebIdentityResult"`
+	ResponseMetadata struct {
+		RequestID string `xml:"RequestId,omitempty"`
+	} `xml:"ResponseMetadata,omitempty"`
+}
+
+// AssumedRoleUser - The identifiers for the temporary security credentials that
+// the operation returns. Please also see https://docs.aws.amazon.com/goto/WebAPI/sts-2011-06-15/AssumedRoleUser
+type AssumedRoleUser struct {
+	Arn           string
+	AssumedRoleID string `xml:"AssumeRoleId"`
+	// contains filtered or unexported fields
+}
+
+// WebIdentityResult - Contains the response to a successful AssumeRoleWithWebIdentity
+// request, including temporary credentials that can be used to make MinIO API requests.
+type WebIdentityResult struct {
+	AssumedRoleUser             AssumedRoleUser  `xml:",omitempty"`
+	Audience                    string           `xml:",omitempty"`
+	Credentials                 auth.Credentials `xml:",omitempty"`
+	PackedPolicySize            int              `xml:",omitempty"`
+	Provider                    string           `xml:",omitempty"`
+	SubjectFromWebIdentityToken string           `xml:",omitempty"`
+}
+
+// Retrieve credentials
+func (t *IAMProvider) Retrieve() (credentials.Value, error) {
+
+	token, err := liboidcagent.GetAccessToken2(t.accountname, 60, "", "", "")
+	if err != nil {
+		fmt.Printf("%s\n", err)
+		// Additional error handling
+	} else {
+		fmt.Printf("Access token is: %s\n", token)
+	}
+
+	contentType := ""
+	body := url.Values{}
+	body.Set("Action", "AssumeRoleWithWebIdentity")
+	body.Set("Version", "2011-06-15")
+	body.Set("WebIdentityToken", token)
+	body.Set("DurationSeconds", "900")
+
+	// TODO: retrieve token with https POST with t.httpClient
+	r, err := t.httpClient.Post(t.stsEndpoint, contentType, strings.NewReader(body.Encode()))
+	if err != nil {
+		return credentials.Value{}, err
+	}
+
+	t.creds = &AssumeRoleWithWebIdentityResponse{}
+
+	rbody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Printf("error: %v", err)
+		return credentials.Value{}, err
+	}
+
+	err = xml.Unmarshal(rbody, t.creds)
+	if err != nil {
+		fmt.Printf("error: %v", err)
+		return credentials.Value{}, err
+	}
+
+	return credentials.Value{
+		AccessKeyID:     t.creds.Result.Credentials.AccessKey,
+		SecretAccessKey: t.creds.Result.Credentials.SecretKey,
+		SessionToken:    t.creds.Result.Credentials.SessionToken,
+	}, nil
+
+}
+
+// IsExpired test
+func (t *IAMProvider) IsExpired() bool {
+	return t.creds.Result.Credentials.IsExpired()
+}
+
 // s3Connection makes a connection to s3
 func s3Connection(opt *Options) (*s3.S3, *session.Session, error) {
 	// Make the auth
@@ -1084,6 +1174,13 @@ func s3Connection(opt *Options) (*s3.S3, *session.Session, error) {
 
 	// first provider to supply a credential set "wins"
 	providers := []credentials.Provider{
+
+		&IAMProvider{
+			stsEndpoint: "https://131.154.97.121:9001/",
+			accountname: "demo",
+			httpClient:  def.Config.HTTPClient,
+		},
+
 		// use static credentials if they're present (checked by provider)
 		&credentials.StaticProvider{Value: v},
 
@@ -1119,7 +1216,7 @@ func s3Connection(opt *Options) (*s3.S3, *session.Session, error) {
 		// No need for empty checks if "env_auth" is true
 	case v.AccessKeyID == "" && v.SecretAccessKey == "":
 		// if no access key/secret and iam is explicitly disabled then fall back to anon interaction
-		cred = credentials.AnonymousCredentials
+		//cred = credentials.AnonymousCredentials
 	case v.AccessKeyID == "":
 		return nil, nil, errors.New("access_key_id not found")
 	case v.SecretAccessKey == "":
