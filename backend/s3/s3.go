@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
@@ -44,7 +45,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/indigo-dc/liboidcagent-go/liboidcagent"
 	"github.com/minio/minio/pkg/auth"
 	"github.com/ncw/swift"
 	"github.com/pkg/errors"
@@ -1105,15 +1105,23 @@ type WebIdentityResult struct {
 // Retrieve credentials
 func (t *IAMProvider) Retrieve() (credentials.Value, error) {
 
-	token, err := liboidcagent.GetAccessToken2(t.accountname, 60, "", "", "")
-	if err != nil {
-		fmt.Printf("%s\n", err)
-		// Additional error handling
-	} else {
-		fmt.Printf("Access token is: %s\n", token)
-	}
+	//token, err := liboidcagent.GetAccessToken2(t.accountname, 60, "", "", "")
+	//if err != nil {
+	//	fmt.Printf("%s\n", err)
+	//	// Additional error handling
+	//} else {
+	//	fmt.Printf("Access token is: %s\n", token)
+	//}
 
-	contentType := ""
+	dat, err := ioutil.ReadFile(".token")
+	if err != nil {
+		return credentials.Value{}, err
+	}
+	fmt.Print(string(dat))
+
+	token := string(dat)
+
+	//contentType := ""
 	body := url.Values{}
 	body.Set("Action", "AssumeRoleWithWebIdentity")
 	body.Set("Version", "2011-06-15")
@@ -1121,7 +1129,17 @@ func (t *IAMProvider) Retrieve() (credentials.Value, error) {
 	body.Set("DurationSeconds", "900")
 
 	// TODO: retrieve token with https POST with t.httpClient
-	r, err := t.httpClient.Post(t.stsEndpoint, contentType, strings.NewReader(body.Encode()))
+	//r, err := t.httpClient.Post(t.stsEndpoint, contentType, strings.NewReader(body.Encode()))
+	url, err := url.Parse(t.stsEndpoint + "?" + body.Encode())
+
+	fmt.Println(url)
+	req := http.Request{
+		Method: "POST",
+		URL:    url,
+	}
+
+	// TODO: retrieve token with https POST with t.httpClient
+	r, err := t.httpClient.Do(&req)
 	if err != nil {
 		return credentials.Value{}, err
 	}
@@ -1162,7 +1180,19 @@ func s3Connection(opt *Options) (*s3.S3, *session.Session, error) {
 		SessionToken:    opt.SessionToken,
 	}
 
-	lowTimeoutClient := &http.Client{Timeout: 1 * time.Second} // low timeout to ec2 metadata service
+	cfg := &tls.Config{
+		//ClientCAs: caCertPool,
+		InsecureSkipVerify: true,
+	}
+
+	tr := &http.Transport{
+		TLSClientConfig: cfg,
+	}
+
+	lowTimeoutClient := &http.Client{
+		Timeout:   1 * time.Second,
+		Transport: tr,
+	} // low timeout to ec2 metadata service
 	def := defaults.Get()
 	def.Config.HTTPClient = lowTimeoutClient
 
