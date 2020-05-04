@@ -4,6 +4,8 @@ rclone
 build
 docs/public
 rclone.iml
+rclone_osx
+rclone_windows*
 .idea
 .history
 *.test

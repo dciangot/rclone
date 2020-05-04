@@ -114,8 +114,6 @@ github.com/hanwen/go-fuse/v2/internal/utimens
 github.com/hanwen/go-fuse/v2/splice
 # github.com/inconshreveable/mousetrap v1.0.0
 github.com/inconshreveable/mousetrap
-# github.com/indigo-dc/liboidcagent-go v0.0.0-20200117100939-1eccc83fdcaf
-github.com/indigo-dc/liboidcagent-go/liboidcagent
 # github.com/jlaffaye/ftp v0.0.0-20191218041957-e1b8fdd0dcc3
 github.com/jlaffaye/ftp
 # github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af
